@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { User, Settings, LogOut, Coins, Trophy } from 'lucide-react'
+import { User, Settings, LogOut, Coins, Trophy, Gift } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { Link } from 'react-router-dom'
 
@@ -111,6 +111,15 @@ const ProfileButton: React.FC = () => {
                   <Settings className="h-4 w-4" />
                   <span>Profile Settings</span>
                 </Link>
+                 <Link
+                   to="/rewards"
+                   onClick={() => setIsOpen(false)}
+                   className="flex items-center gap-3 w-full p-3 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                 >
+                   <Gift className="h-4 w-4 text-purple-400" />
+                   <span>Redeem Points</span>
+                 </Link>
+                 
                 
                 <button
                   onClick={handleSignOut}

@@ -181,6 +181,17 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <span className="font-semibold">{userProfile?.points || 0} Points</span>
               </motion.div>
               
+             {/* Redeem Button */}
+             <Link to="/rewards">
+               <motion.div 
+                 className="flex items-center gap-2 text-white bg-purple-500/20 px-3 py-1.5 rounded-full border border-purple-400/30"
+                 whileHover={{ scale: 1.02 }}
+               >
+                 <Gift className="h-5 w-5 text-purple-400" />
+                 <span className="font-semibold hidden sm:inline">Redeem</span>
+               </motion.div>
+             </Link>
+             
               {/* Profile Button */}
               <ProfileButton />
             </div>
