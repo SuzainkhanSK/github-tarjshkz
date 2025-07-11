@@ -91,14 +91,33 @@ const AdminDashboard: React.FC = () => {
   const fetchDashboardStats = async () => {
     if (!isSupabaseConfigured) {
       setLoading(false)
+      setStats({
+        totalUsers: 0,
+        activeUsers: 0,
+        totalTransactions: 0,
+        totalPoints: 0,
+        pendingRedemptions: 0,
+        completedRedemptions: 0,
+        todaySignups: 0,
+        todayEarnings: 0,
+        totalSpins: 0,
+        totalScratches: 0,
+        totalTasks: 0,
+        systemHealth: 'warning'
+      });
       return
     }
 
     try {
       setRefreshing(true)
       
-      // Use the new admin dashboard stats function
-      const { data, error } = await supabase.rpc('get_admin_dashboard_stats')
+      // Add timeout handling for the RPC call
+      const statsPromise = supabase.rpc('get_admin_dashboard_stats');
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Dashboard stats timeout')), 15000)
+      );
+      
+      const { data, error } = await Promise.race([statsPromise, timeoutPromise]) as any;
       
       if (error) throw error
       
@@ -133,15 +152,40 @@ const AdminDashboard: React.FC = () => {
   const fetchRecentActivity = async (showLoading = true) => {
     if (!isSupabaseConfigured) return
 
+    let loadingTimeout: NodeJS.Timeout | null = null
+    if (showLoading) {
+      setActivityLoading(true)
+      loadingTimeout = setTimeout(() => {
+        setActivityLoading(false)
+      }, 20000) // 20 second maximum loading time
+    }
+
     try {
-      if (showLoading) {
-        setActivityLoading(true)
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
       }
 
-      // Use the new admin recent activity function
-      const { data, error } = await supabase.rpc('get_admin_recent_activity')
+      // Call admin edge function to fetch recent activity
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-users?action=recent-activity`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      )
       
-      if (error) throw error
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to fetch recent activity: ${response.status} ${response.statusText}`)
+      }
+      
+      const data = await response.json()
       
       // Process transactions
       const activity: RecentActivity[] = []
@@ -192,6 +236,7 @@ const AdminDashboard: React.FC = () => {
     } finally {
       if (showLoading) {
         setActivityLoading(false)
+        if (loadingTimeout) clearTimeout(loadingTimeout);
       }
     }
   }

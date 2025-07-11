@@ -61,6 +61,7 @@ const UserManagement: React.FC = () => {
   const [selectedUser, setSelectedUser] = useState<UserData | null>(null)
   const [editingUser, setEditingUser] = useState<UserData | null>(null)
   const [pointsToAdd, setPointsToAdd] = useState('')
+  const [processingRequest, setProcessingRequest] = useState<string | null>(null)
   const [loadingStats, setLoadingStats] = useState(false)
 
   useEffect(() => {
@@ -70,69 +71,77 @@ const UserManagement: React.FC = () => {
   }, [hasPermission])
 
   const fetchUsers = async () => {
-    if (!isSupabaseConfigured) {
-      setLoading(false)
-      return
-    }
-
     try {
       setLoading(true)
       
-      // Use the new user management stats function
-      const { data, error } = await supabase.rpc('get_user_management_stats')
-      
-      if (error) throw error
-      
-      // Process user data from the function result
-      if (data.topEarners && Array.isArray(data.topEarners)) {
-        const usersWithDefaults = data.topEarners.map((profile: any) => ({
-          ...profile,
-          status: 'active' as const,
-          has_profile: true,
-          transaction_count: 0,
-          spin_count: 0,
-          scratch_count: 0,
-          task_count: 0
-        }));
-        
-        setUsers(usersWithDefaults);
-        
-        // Fetch additional stats in the background (non-blocking)
-        if (usersWithDefaults.length > 0) {
-          fetchUserStats(usersWithDefaults);
-        }
-      } else {
-        setUsers([]);
+      if (!isSupabaseConfigured) {
+        setUsers([])
+        setLoading(false)
+        return
       }
 
+      // Get session for auth token
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        toast.error('Authentication required');
+        setUsers([]);
+        setLoading(false);
+        return;
+      }
+      
+      try {
+        // Call admin edge function to fetch all users
+        const response = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-users?action=list`,
+          {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || `Failed to fetch users: ${response.status} ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (Array.isArray(data.users)) {
+          setUsers(data.users);
+        } else {
+          console.error('Unexpected response format:', data);
+          setUsers([]);
+          toast.error('Received invalid user data format from server');
+        }
+      } catch (fetchError) {
+        console.error('Failed to fetch users:', fetchError);
+        toast.error(fetchError instanceof Error ? fetchError.message : 'Failed to fetch users');
+        setUsers([]);
+      }
+      
     } catch (error) {
       console.error('Failed to fetch users:', error)
-      toast.error('Failed to load users')
+      
+      // Show more user-friendly error message
+      if (error instanceof Error) {
+        if (error.message.includes('timeout')) {
+          toast.error('Request timed out. The server is taking too long to respond.');
+        } else if (error.message.includes('fetch')) {
+          toast.error('Network error. Please check your connection and try again.');
+        } else {
+          toast.error(`Failed to load users: ${error.message}`);
+        }
+      } else {
+        toast.error('Failed to load users due to an unknown error');
+      }
+      
       setUsers([])
     } finally {
       setLoading(false)
-    }
-  }
-
-  const fetchUserStats = async (userList: UserData[]) => {
-    if (!userList || userList.length === 0) return
-
-    try {
-      setLoadingStats(true)
-      
-      // Use the new get_all_users_with_stats function
-      const { data, error } = await supabase.rpc('get_all_users_with_stats')
-      
-      if (error) throw error
-      
-      if (data && data.users && Array.isArray(data.users)) {
-        // Update users with the stats from the function
-        setUsers(data.users)
-      }
-    } catch (error) {
-      console.warn('Failed to fetch user stats:', error)
-    } finally {
-      setLoadingStats(false)
     }
   }
 
@@ -142,48 +151,46 @@ const UserManagement: React.FC = () => {
       return
     }
 
+    setProcessingRequest(userId);
+
     try {
-      // Get current user points
-      const { data: user, error: userError } = await supabase
-        .from('profiles')
-        .select('points, total_earned')
-        .eq('id', userId)
-        .single()
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
+      }
 
-      if (userError) throw userError
+      // Call admin edge function to update points
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-users?action=update-points`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId,
+            pointsToAdd,
+            description
+          })
+        }
+      )
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to update points')
+      }
+      
+      const result = await response.json()
 
-      const newPoints = user.points + pointsToAdd
-      const newTotalEarned = pointsToAdd > 0 ? user.total_earned + pointsToAdd : user.total_earned
-
-      // Update user points
-      const { error: updateError } = await supabase
-        .from('profiles')
-        .update({
-          points: Math.max(0, newPoints),
-          total_earned: newTotalEarned
-        })
-        .eq('id', userId)
-
-      if (updateError) throw updateError
-
-      // Add transaction record
-      const { error: transactionError } = await supabase
-        .from('transactions')
-        .insert({
-          user_id: userId,
-          type: pointsToAdd > 0 ? 'earn' : 'redeem',
-          points: Math.abs(pointsToAdd),
-          description: description,
-          task_type: 'admin_adjustment'
-        })
-
-      if (transactionError) throw transactionError
-
-      toast.success(`Successfully ${pointsToAdd > 0 ? 'added' : 'deducted'} ${Math.abs(pointsToAdd)} points`)
+      toast.success(result.message)
       fetchUsers()
     } catch (error) {
-      console.error('Failed to update user points:', error)
-      toast.error('Failed to update user points')
+      console.error('Failed to update user points:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update user points');
+    } finally {
+      setProcessingRequest(null);
     }
   }
 
@@ -193,13 +200,44 @@ const UserManagement: React.FC = () => {
       return
     }
 
+    setProcessingRequest(userId);
+
     try {
-      // In a real implementation, you would update the user status in the database
-      toast.success(`User ${action}ned successfully`)
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
+      }
+
+      // Call admin edge function to update user status
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-users?action=update-status`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId,
+            action
+          })
+        }
+      )
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to ${action} user`)
+      }
+      
+      const result = await response.json()
+      toast.success(result.message)
       fetchUsers()
     } catch (error) {
-      console.error(`Failed to ${action} user:`, error)
-      toast.error(`Failed to ${action} user`)
+      console.error(`Failed to ${action} user:`, error);
+      toast.error(error instanceof Error ? error.message : `Failed to ${action} user`);
+    } finally {
+      setProcessingRequest(null);
     }
   }
 
@@ -603,6 +641,7 @@ const UserManagement: React.FC = () => {
                                 setEditingUser(user)
                                 setPointsToAdd('')
                               }}
+                              disabled={processingRequest === user.id}
                               className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
                             >
                               <Edit className="h-4 w-4" />
@@ -611,9 +650,14 @@ const UserManagement: React.FC = () => {
                           {hasPermission('users.ban') && (
                             <button
                               onClick={() => handleUserAction(user.id, user.status === 'active' ? 'ban' : 'activate')}
+                              disabled={processingRequest === user.id}
                               className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
                             >
-                              <Ban className="h-4 w-4" />
+                              {processingRequest === user.id ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Ban className="h-4 w-4" />
+                              )}
                             </button>
                           )}
                         </div>

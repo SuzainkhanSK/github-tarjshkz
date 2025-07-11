@@ -65,23 +65,46 @@ const RedemptionManagement: React.FC = () => {
   const fetchRedemptionRequests = async () => {
     if (!isSupabaseConfigured) {
       setLoading(false)
-      toast.error('Supabase is not configured. Please check your environment variables.')
+      toast.error('Database not configured')
       return
     }
 
     try {
       setLoading(true)
-      const { data, error } = await supabase
-        .from('redemption_requests')
-        .select(`
-          *,
-          profiles!inner(full_name, email)
-        `)
-        .not('id', 'is', null)
-        .order('created_at', { ascending: false })
+      
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
+      }
 
-      if (error) throw error
-      setRequests(data || [])
+      // Call admin edge function to fetch all redemption requests
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-redemptions?action=list`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      )
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to fetch redemption requests: ${response.status} ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+      
+      if (Array.isArray(data)) {
+        setRequests(data)
+      } else {
+        console.error('Unexpected response format:', data)
+        setRequests([])
+        toast.error('Received invalid data format from server')
+      }
     } catch (error) {
       console.error('Failed to fetch redemption requests:', error)
       toast.error('Failed to load redemption requests')
@@ -97,7 +120,7 @@ const RedemptionManagement: React.FC = () => {
     instructions?: string
   ) => {
     if (!isSupabaseConfigured) {
-      toast.error('Supabase is not configured. Please check your environment variables.')
+      toast.error('Database not configured')
       return
     }
 
@@ -109,34 +132,42 @@ const RedemptionManagement: React.FC = () => {
     setProcessingRequest(requestId)
 
     try {
-      const updateData: any = {
-        status: newStatus,
-        completed_at: ['completed', 'failed', 'cancelled'].includes(newStatus) ? new Date().toISOString() : null
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
       }
 
-      if (activationCode) updateData.activation_code = activationCode
-      if (instructions) updateData.instructions = instructions
-      if (newStatus === 'completed' && activationCode) {
-        updateData.expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+      // Call admin edge function to update redemption request
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-redemptions?action=update`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            requestId,
+            newStatus,
+            activationCode,
+            instructions
+          })
+        }
+      )
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to update redemption request: ${response.status} ${response.statusText}`)
       }
-
-      const { error } = await supabase
-        .from('redemption_requests')
-        .update(updateData)
-        .eq('id', requestId)
-
-      if (error) throw error
 
       toast.success(`Request ${newStatus} successfully`)
       fetchRedemptionRequests()
       setShowRequestModal(false)
     } catch (error) {
       console.error('Failed to update request:', error)
-      if (error instanceof Error) {
-        toast.error(`Failed to update request: ${error.message}`)
-      } else {
-        toast.error('Failed to update request: Unknown error occurred')
-      }
+      toast.error(error instanceof Error ? error.message : 'Failed to update request')
     } finally {
       setProcessingRequest(null)
     }

@@ -33,7 +33,8 @@ export function useAdmin() {
 
 // Admin email list - Updated with your email
 const ADMIN_EMAILS = [
-  'Suzainkhan8360@gmail.com',  // Your admin email
+  'suzainkhan8360@gmail.com',  // Your admin email (lowercase)
+  'Suzainkhan8360@gmail.com',  // Your admin email (original case)
   'admin@premiumaccesszone.com',
   'support@premiumaccesszone.com',
   'moderator@premiumaccesszone.com'

@@ -29,6 +29,7 @@ import { useAdmin } from '../../contexts/AdminContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabase'
 import toast from 'react-hot-toast'
 
+// Define the subscription availability interface
 interface SubscriptionAvailability {
   id: string
   subscription_id: string
@@ -88,20 +89,46 @@ const SubscriptionManagement: React.FC = () => {
   const fetchSubscriptionAvailability = async () => {
     if (!isSupabaseConfigured) {
       setLoading(false)
+      toast.error('Supabase is not configured')
       return
     }
 
     try {
       setRefreshing(true)
-      const { data, error } = await supabase
-        .from('subscription_availability')
-        .select('*')
-        .not('id', 'is', null)
-        .order('subscription_id', { ascending: true })
-        .order('duration', { ascending: true })
+      
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
+      }
 
-      if (error) throw error
-      setSubscriptions(data || [])
+      // Call admin edge function to fetch all subscriptions
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-subscriptions?action=list`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      )
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to fetch subscriptions: ${response.status} ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+
+      if (Array.isArray(data)) {
+        setSubscriptions(data)
+      } else {
+        console.error('Unexpected response format:', data)
+        setSubscriptions([])
+        toast.error('Received invalid data format from server')
+      }
     } catch (error) {
       console.error('Failed to fetch subscription availability:', error)
       toast.error('Failed to load subscription availability data')
@@ -125,12 +152,39 @@ const SubscriptionManagement: React.FC = () => {
     setProcessingId(id)
 
     try {
-      const { error } = await supabase
-        .from('subscription_availability')
-        .update({ in_stock: !currentStatus })
-        .eq('id', id)
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
+      }
 
-      if (error) throw error
+      // Call admin edge function to toggle subscription
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-subscriptions?action=toggle`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            id,
+            currentStatus
+          })
+        }
+      )
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to update subscription: ${response.status} ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+
+      if (!data || !data.id) {
+        throw new Error('Failed to update subscription status')
+      }
 
       // Update local state
       setSubscriptions(prev => 
@@ -165,19 +219,40 @@ const SubscriptionManagement: React.FC = () => {
     }
 
     try {
-      // Create subscription ID from name if not provided
-      const subscriptionId = formData.subscription_id.toLowerCase().replace(/\s+/g, '_')
+      setLoading(true)
+      
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
+      }
 
-      const { data, error } = await supabase
-        .from('subscription_availability')
-        .insert({
-          subscription_id: subscriptionId,
-          duration: formData.duration,
-          in_stock: true
-        })
-        .select()
+      // Normalize subscription ID
+      const subscriptionId = formData.subscription_id.trim().toLowerCase().replace(/\s+/g, '_')
 
-      if (error) throw error
+      // Call admin edge function to add subscription
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-subscriptions?action=add`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            subscription_id: subscriptionId,
+            duration: formData.duration.trim()
+          })
+        }
+      )
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to add subscription: ${response.status} ${response.statusText}`)
+      }
+      
+      const data = await response.json()
 
       // Add to local state
       if (data) {
@@ -207,6 +282,8 @@ const SubscriptionManagement: React.FC = () => {
     } catch (error) {
       console.error('Failed to add subscription availability:', error)
       toast.error('Failed to add subscription availability')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -226,14 +303,33 @@ const SubscriptionManagement: React.FC = () => {
     }
 
     setProcessingId(id)
+    setLoading(true)
 
     try {
-      const { error } = await supabase
-        .from('subscription_availability')
-        .delete()
-        .eq('id', id)
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required')
+      }
 
-      if (error) throw error
+      // Call admin edge function to delete subscription
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-subscriptions?action=delete`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ id })
+        }
+      )
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to delete subscription: ${response.status} ${response.statusText}`)
+      }
 
       // Update local state
       setSubscriptions(prev => prev.filter(sub => sub.id !== id))
@@ -243,6 +339,7 @@ const SubscriptionManagement: React.FC = () => {
       toast.error('Failed to delete subscription availability')
     } finally {
       setProcessingId(null)
+      setLoading(false)
     }
   }
 

@@ -11,9 +11,12 @@ export interface DatabaseStatus {
     spin_history: { exists: boolean; count: number }
     scratch_history: { exists: boolean; count: number }
     redemption_requests: { exists: boolean; count: number }
-    admin_users: { exists: boolean; count: number }
   }
-  authUsers: { accessible: boolean; count: number; error?: string }
+  authUsers: {
+    accessible: boolean
+    count: number
+    error?: string
+  }
   errors: string[]
   recommendations: string[]
 }
@@ -28,10 +31,12 @@ export async function checkDatabaseStatus(): Promise<DatabaseStatus> {
       tasks: { exists: false, count: 0 },
       spin_history: { exists: false, count: 0 },
       scratch_history: { exists: false, count: 0 },
-      redemption_requests: { exists: false, count: 0 },
-      admin_users: { exists: false, count: 0 }
+      redemption_requests: { exists: false, count: 0 }
     },
-    authUsers: { accessible: false, count: 0 },
+    authUsers: {
+      accessible: false,
+      count: 0
+    },
     errors: [],
     recommendations: []
   }
@@ -57,7 +62,7 @@ export async function checkDatabaseStatus(): Promise<DatabaseStatus> {
     status.isConnected = true
 
     // Check each table
-    const tables = ['profiles', 'transactions', 'tasks', 'spin_history', 'scratch_history', 'redemption_requests', 'admin_users']
+    const tables = ['profiles', 'transactions', 'tasks', 'spin_history', 'scratch_history', 'redemption_requests']
     
     for (const tableName of tables) {
       try {
@@ -90,39 +95,12 @@ export async function checkDatabaseStatus(): Promise<DatabaseStatus> {
       }
     }
 
-    // Check auth.users access (this will likely fail with anon key)
-    try {
-      const { data: authData, error: authError } = await supabase.auth.admin.listUsers()
-      
-      if (authError) {
-        status.authUsers = { 
-          accessible: false, 
-          count: 0, 
-          error: authError.message 
-        }
-        status.recommendations.push('Auth users table requires service role key (expected limitation)')
-      } else {
-        status.authUsers = { 
-          accessible: true, 
-          count: authData.users?.length || 0 
-        }
-      }
-    } catch (error: any) {
-      status.authUsers = { 
-        accessible: false, 
-        count: 0, 
-        error: error.message 
-      }
-    }
 
     // Generate recommendations
     if (status.tables.profiles.count === 0) {
       status.recommendations.push('No user profiles found - users may need to sign up')
     }
 
-    if (status.tables.admin_users.count === 0) {
-      status.recommendations.push('No admin users found - create admin users manually')
-    }
 
     if (status.tables.profiles.count > 0 && status.tables.transactions.count === 0) {
       status.recommendations.push('Users exist but no transactions - check signup bonus system')
@@ -133,6 +111,11 @@ export async function checkDatabaseStatus(): Promise<DatabaseStatus> {
       status.recommendations.push('High transaction to user ratio - check for data integrity')
     }
 
+    // Check auth.users accessibility (this will likely fail due to RLS)
+    // Note: Auth users table requires service role privileges and cannot be accessed from frontend
+    status.authUsers.accessible = false
+    status.authUsers.error = 'Auth users not accessible from frontend (expected behavior)'
+    status.authUsers.count = 0
   } catch (error: any) {
     status.errors.push(`Database check failed: ${error.message}`)
   }

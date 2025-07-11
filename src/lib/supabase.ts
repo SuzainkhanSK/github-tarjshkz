@@ -33,7 +33,7 @@ export const supabase = createClient(
 
         // Add timeout and better error handling
         const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 8000)
+        const timeoutId = setTimeout(() => controller.abort(), 60000) // Increase timeout to 60 seconds for admin operations
 
         return fetch(url, {
           ...options,

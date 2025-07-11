@@ -109,7 +109,7 @@ export class DatabaseMonitor {
 export const databaseMonitor = new DatabaseMonitor()
 
 // Query optimization utilities
-export const optimizeQuery = (query: any, options: { timeout?: number } = {}) => {
+export const optimizeQuery = async (query: any, options: { timeout?: number } = {}) => {
   return databaseMonitor.optimizeQuery(query, options)
 }
 
@@ -143,8 +143,8 @@ export const batchQueries = async (queries: Promise<any>[], options: { timeout?:
 // Connection retry utility with exponential backoff
 export const retryConnection = async (
   operation: () => Promise<any>, 
-  maxRetries: number = 2,
-  delay: number = 500
+  maxRetries: number = 3,
+  delay: number = 1000
 ): Promise<any> => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -161,7 +161,7 @@ export const retryConnection = async (
       
       console.warn(`Connection attempt ${attempt} failed, retrying in ${delay}ms...`)
       await new Promise(resolve => setTimeout(resolve, delay))
-      delay *= 1.5
+      delay *= 2
     }
   }
 }
