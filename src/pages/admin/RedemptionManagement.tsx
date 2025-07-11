@@ -63,12 +63,6 @@ const RedemptionManagement: React.FC = () => {
   }, [hasPermission])
 
   const fetchRedemptionRequests = async () => {
-    if (!isSupabaseConfigured) {
-      setLoading(false)
-      toast.error('Database not configured')
-      return
-    }
-
     try {
       setLoading(true)
       
@@ -79,24 +73,33 @@ const RedemptionManagement: React.FC = () => {
         throw new Error('Authentication required')
       }
 
-      // Call admin edge function to fetch all redemption requests
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-redemptions?action=list`,
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      )
+      // Construct the URL properly
+      const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-redemptions`
+      
+      console.log('Fetching redemption requests from:', functionUrl)
+      
+      const response = await fetch(functionUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+      })
       
       if (!response.ok) {
-        const errorData = await response.json()
+        const errorText = await response.text()
+        console.error('Edge Function error response:', errorText)
+        let errorData
+        try {
+          errorData = JSON.parse(errorText)
+        } catch {
+          errorData = { error: errorText }
+        }
         throw new Error(errorData.error || `Failed to fetch redemption requests: ${response.status} ${response.statusText}`)
       }
       
       const data = await response.json()
+      console.log('Fetched redemption requests:', data)
       
       if (Array.isArray(data)) {
         setRequests(data)
@@ -116,14 +119,9 @@ const RedemptionManagement: React.FC = () => {
   const updateRequestStatus = async (
     requestId: string, 
     newStatus: 'processing' | 'completed' | 'failed' | 'cancelled',
-    activationCode?: string,
-    instructions?: string
+   activationCode?: string,
+   instructions?: string
   ) => {
-    if (!isSupabaseConfigured) {
-      toast.error('Database not configured')
-      return
-    }
-
     if (!hasPermission('redemptions.update')) {
       toast.error('You do not have permission to update redemption requests')
       return
@@ -139,32 +137,49 @@ const RedemptionManagement: React.FC = () => {
         throw new Error('Authentication required')
       }
 
-      // Call admin edge function to update redemption request
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-redemptions?action=update`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            requestId,
-            newStatus,
-            activationCode,
-            instructions
-          })
-        }
-      )
+      // Construct the URL properly
+      const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-redemptions`
+      
+     // Log request details for debugging
+     console.log('Updating redemption request:', {
+       url: functionUrl,
+       requestId,
+       newStatus,
+      activationCode: activationCode ? 'provided' : 'not provided',
+      instructions: instructions ? 'provided' : 'not provided'
+     })
+      
+      const response = await fetch(functionUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requestId,
+          newStatus,
+          activationCode,
+          instructions
+        })
+      })
       
       if (!response.ok) {
-        const errorData = await response.json()
+        const errorText = await response.text()
+        console.error('Edge Function error response:', errorText)
+        let errorData
+        try {
+          errorData = JSON.parse(errorText)
+        } catch {
+          errorData = { error: errorText }
+        }
         throw new Error(errorData.error || `Failed to update redemption request: ${response.status} ${response.statusText}`)
       }
+      
+      const result = await response.json()
+      console.log('Edge Function success response:', result)
 
       toast.success(`Request ${newStatus} successfully`)
       fetchRedemptionRequests()
-      setShowRequestModal(false)
     } catch (error) {
       console.error('Failed to update request:', error)
       toast.error(error instanceof Error ? error.message : 'Failed to update request')
@@ -544,29 +559,34 @@ const RedemptionManagement: React.FC = () => {
                           <div className="space-y-3">
                             <button
                               onClick={() => {
-                                const code = prompt('Enter activation code:')
+                                const code = prompt('Enter activation code (required):')
                                 if (code) {
-                                  const instructions = prompt('Enter instructions (optional):')
-                                  updateRequestStatus(selectedRequest.id, 'completed', code, instructions || undefined)
+                                  const instructions = prompt('Enter instructions for the user (optional):')
+                                  updateRequestStatus(selectedRequest.id, 'completed', code, instructions)
+                                } else {
+                                  toast.error('Activation code is required to complete the request')
                                 }
                               }}
+                              disabled={processingRequest === selectedRequest.id}
                               className="w-full py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-medium transition-colors"
                             >
-                              Mark as Completed
+                              {processingRequest === selectedRequest.id ? 'Processing...' : 'Mark as Completed'}
                             </button>
                             <button
                               onClick={() => updateRequestStatus(selectedRequest.id, 'failed')}
+                              disabled={processingRequest === selectedRequest.id}
                               className="w-full py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-medium transition-colors"
                             >
-                              Mark as Failed
+                              {processingRequest === selectedRequest.id ? 'Processing...' : 'Mark as Failed'}
                             </button>
                           </div>
                         )}
                         <button
                           onClick={() => updateRequestStatus(selectedRequest.id, 'cancelled')}
+                          disabled={processingRequest === selectedRequest.id}
                           className="w-full py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-xl font-medium transition-colors"
                         >
-                          Cancel Request
+                          {processingRequest === selectedRequest.id ? 'Processing...' : 'Cancel Request'}
                         </button>
                       </div>
                     </div>

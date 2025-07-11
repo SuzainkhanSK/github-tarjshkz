@@ -22,17 +22,28 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Create admin client with service role key
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false
+    // Get environment variables
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.error('Missing environment variables:', { supabaseUrl: !!supabaseUrl, supabaseServiceKey: !!supabaseServiceKey })
+      return new Response(
+        JSON.stringify({ error: 'Server configuration error' }),
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
         }
+      )
+    }
+
+    // Create admin client with service role key
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
       }
-    )
+    })
 
     // Verify the request is from an authenticated admin user
     const authHeader = req.headers.get('Authorization')
@@ -51,6 +62,7 @@ Deno.serve(async (req) => {
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
     
     if (authError || !user) {
+      console.error('Auth error:', authError)
       return new Response(
         JSON.stringify({ error: 'Invalid or expired token' }),
         { 
@@ -66,6 +78,7 @@ Deno.serve(async (req) => {
     )
     
     if (!isAdminEmail) {
+      console.error('Access denied for user:', user.email)
       return new Response(
         JSON.stringify({ error: 'Access denied - admin privileges required' }),
         { 
@@ -76,27 +89,28 @@ Deno.serve(async (req) => {
     }
 
     const url = new URL(req.url)
-    const action = url.searchParams.get('action') || 'list'
+    const action = url.searchParams.get('action') || (req.method === 'GET' ? 'list' : 'update')
 
-    switch (action) {
-      case 'list':
-        return await handleListRedemptions(supabaseAdmin)
-      case 'update':
-        return await handleUpdateRedemption(supabaseAdmin, req)
-      default:
-        return new Response(
-          JSON.stringify({ error: 'Invalid action' }),
-          { 
-            status: 400, 
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-          }
-        )
+    console.log('Processing action:', action, 'Method:', req.method)
+
+    if (req.method === 'GET' && action === 'list') {
+      return await handleListRedemptions(supabaseAdmin)
+    } else if (req.method === 'POST' && action === 'update') {
+      return await handleUpdateRedemption(supabaseAdmin, req)
+    } else {
+      return new Response(
+        JSON.stringify({ error: 'Invalid action or method' }),
+        { 
+          status: 400, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      )
     }
 
   } catch (error) {
     console.error('Admin redemptions function error:', error)
     return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
+      JSON.stringify({ error: 'Internal server error', details: error.message }),
       { 
         status: 500, 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -107,6 +121,8 @@ Deno.serve(async (req) => {
 
 async function handleListRedemptions(supabaseAdmin: any) {
   try {
+    console.log('Fetching redemption requests...')
+    
     // Fetch all redemption requests with user profiles
     const { data, error } = await supabaseAdmin
       .from('redemption_requests')
@@ -116,10 +132,15 @@ async function handleListRedemptions(supabaseAdmin: any) {
       `)
       .order('created_at', { ascending: false })
     
-    if (error) throw error
+    if (error) {
+      console.error('Database error:', error)
+      throw error
+    }
+
+    console.log('Successfully fetched', data?.length || 0, 'redemption requests')
 
     return new Response(
-      JSON.stringify(data),
+      JSON.stringify(data || []),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
       }
@@ -138,7 +159,10 @@ async function handleListRedemptions(supabaseAdmin: any) {
 
 async function handleUpdateRedemption(supabaseAdmin: any, req: Request) {
   try {
-    const { requestId, newStatus, activationCode, instructions } = await req.json()
+    const body = await req.json()
+    console.log('Update request body:', body)
+    
+    const { requestId, newStatus, activationCode, instructions } = body
 
     if (!requestId || !newStatus) {
       return new Response(
@@ -150,17 +174,41 @@ async function handleUpdateRedemption(supabaseAdmin: any, req: Request) {
       )
     }
 
+   // Log the request data for debugging
+   console.log('Processing update request:', {
+     requestId,
+     newStatus,
+     hasActivationCode: !!activationCode,
+     hasInstructions: !!instructions
+   })
+
     // Prepare update data
     const updateData: any = {
       status: newStatus,
       completed_at: ['completed', 'failed', 'cancelled'].includes(newStatus) ? new Date().toISOString() : null
     }
 
-    if (activationCode) updateData.activation_code = activationCode
-    if (instructions) updateData.instructions = instructions
-    if (newStatus === 'completed' && activationCode) {
+   // Only include activation code and instructions if they're provided or if marking as completed
+   if (newStatus === 'completed') {
+     if (!activationCode) {
+       return new Response(
+         JSON.stringify({ error: 'Activation code is required for completed status' }),
+         { 
+           status: 400, 
+           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+         }
+       )
+     }
+     updateData.activation_code = activationCode
+     updateData.instructions = instructions || null
+   }
+   
+   // Set expiration date for completed requests with activation code
+   if (newStatus === 'completed' && activationCode) {
       updateData.expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
     }
+
+    console.log('Updating redemption request:', requestId, 'with data:', updateData)
 
     // Update redemption request
     const { data, error } = await supabaseAdmin
@@ -170,7 +218,12 @@ async function handleUpdateRedemption(supabaseAdmin: any, req: Request) {
       .select()
       .single()
 
-    if (error) throw error
+    if (error) {
+      console.error('Database update error:', error)
+      throw error
+    }
+
+    console.log('Successfully updated redemption request:', data)
 
     return new Response(
       JSON.stringify(data),
